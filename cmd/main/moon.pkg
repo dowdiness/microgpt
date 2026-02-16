@@ -1,0 +1,7 @@
+// import {
+//   "dowdiness/microgpt" @lib,
+// }
+
+options(
+  "is-main": true,
+)
