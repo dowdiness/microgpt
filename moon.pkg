@@ -1,0 +1,6 @@
+import {
+  "moonbitlang/core/hashmap" @hashmap,
+  "moonbitlang/core/hashset" @hashset,
+  "moonbitlang/core/math" @math,
+  "moonbitlang/core/random" @random,
+}

@@ -1,0 +1,68 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "dowdiness/microgpt"
+
+import {
+  "moonbitlang/core/hashmap",
+}
+
+// Values
+pub fn build_tokenizer(Array[String]) -> Tokenizer
+
+pub fn default_config() -> Config
+
+pub fn run_microgpt(Array[String], Int, Int, Double, Config) -> (Model, TrainReport, Array[String])
+
+// Errors
+
+// Types and methods
+pub struct Config {
+  n_embd : Int
+  n_head : Int
+  n_layer : Int
+  block_size : Int
+  init_std : Double
+  learning_rate : Double
+  beta1 : Double
+  beta2 : Double
+  eps_adam : Double
+}
+pub impl Show for Config
+
+pub struct Model {
+  config : Config
+  tokenizer : Tokenizer
+  // private fields
+}
+pub fn Model::new(Array[String], Config) -> Self
+pub fn Model::num_params(Self) -> Int
+pub fn Model::sample(Self, Int, Double) -> Array[String]
+pub fn Model::train(Self, Int) -> TrainReport
+
+pub struct Tokenizer {
+  chars : Array[Char]
+  bos : Int
+  stoi : @hashmap.HashMap[Char, Int]
+}
+pub fn Tokenizer::decode_tokens(Self, Array[Int]) -> String
+pub fn Tokenizer::encode_doc(Self, String) -> Array[Int]
+pub fn Tokenizer::vocab_size(Self) -> Int
+
+pub struct TrainReport {
+  losses : Array[Double]
+}
+
+type Value
+
+// Type aliases
+
+// Traits
+pub(open) trait AutogradEngine {
+  zero() -> Self
+  scalar(Double) -> Self
+  pow(Self, Double) -> Self
+  log(Self) -> Self
+  exp(Self) -> Self
+  relu(Self) -> Self
+  backward(Self) -> Unit
+}
+

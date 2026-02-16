@@ -1,6 +1,6 @@
-// import {
-//   "dowdiness/microgpt" @lib,
-// }
+import {
+  "dowdiness/microgpt" @microgpt,
+}
 
 options(
   "is-main": true,
