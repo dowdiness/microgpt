@@ -1,289 +1,150 @@
-# Implementing microGPT in MoonBit
+# microGPT in MoonBit (Current Implementation)
 
-*A Character-Level Transformer with Manual Autograd*
+This document describes the implementation in this repository as it exists now.
 
-## 1. Overview
+## Acknowledgment
 
-This document describes how to implement a minimal GPT-style language
-model ("microGPT") in MoonBit. The implementation includes:
+Shout-out to the original `microgpt.py` by Andrej Karpathy, which this project
+is based on:
 
--   Character-level tokenization
--   Transformer architecture (RMSNorm + Multi-Head Attention + MLP)
--   Manual reverse-mode automatic differentiation
--   Adam optimizer
--   Autoregressive sampling
+https://gist.github.com/karpathy/8627fe009c40f57531cb18360106ce95
 
-The goal is educational clarity rather than performance.
+## Overview
 
-------------------------------------------------------------------------
+The project implements a small character-level GPT in MoonBit with:
 
-## 2. System Architecture
+- manual reverse-mode autograd,
+- a tiny Transformer-like forward pass,
+- Adam optimization,
+- autoregressive sampling.
 
-The system consists of five major components:
+The implementation is intentionally scalar and educational.
 
-1.  Data preprocessing\
-2.  Tokenization and vocabulary\
-3.  Model definition\
-4.  Training loop\
-5.  Inference (sampling)
+## File Map
 
-------------------------------------------------------------------------
+- `value.mbt`: scalar autograd engine
+- `tokenizer.mbt`: character vocabulary + BOS tokenization
+- `model.mbt`: model weights, forward pass, loss, train, sample
+- `microgpt.mbt`: convenience API (`run_microgpt`)
+- `cmd/main/main.mbt`: runnable demo
 
-## 3. Data Pipeline
+## Tokenization
 
-### 3.1 Input Format
+`Tokenizer` is built from all unique chars in the provided `docs : Array[String]`.
 
--   Input file: `input.txt`
--   Each line represents a training document
--   Empty lines are ignored
+- Characters are sorted.
+- `bos` is assigned to `chars.length()`.
+- `vocab_size = chars.length() + 1`.
 
-Example:
+Document encoding:
 
-    emma
-    olivia
-    noah
+```
+[BOS, c1, c2, ..., cn, BOS]
+```
 
-### 3.2 Document Representation
+## Autograd Engine
 
-After reading:
+The autograd core is trait-oriented plus operator overloading.
 
-    docs : Array[String]
+### Traits and Operators
 
-Each element is treated as a separate training example.
+- `AutogradEngine` defines non-operator primitives:
+  - `zero`, `scalar`, `pow`, `log`, `exp`, `relu`, `backward`
+- `Value` implements operator traits:
+  - `Add`, `Sub`, `Mul`, `Div`, `Neg`
 
-------------------------------------------------------------------------
+This enables model expressions such as:
 
-## 4. Tokenization
+```
+acc = acc + w * x
+loss_t = -probs[target].log()
+```
 
-### 4.1 Vocabulary Construction
+### Value Graph
 
-Collect all unique characters from the dataset.
+Each `Value` stores:
 
-Add a special token:
+- `data : Double`
+- `grad : Double`
+- dependency edges (`child`, `local_grad`)
 
-    BOS (Beginning Of Sequence) = 0
+Every operation creates a new `Value` node with local derivatives. `backward()`:
 
-Vocabulary size becomes:
+1. builds topological order by DFS,
+2. sets output grad to `1.0`,
+3. accumulates gradients in reverse topological order.
 
-    vocab_size = number_of_unique_characters + 1
+## Model Architecture
 
-### 4.2 Mappings
+Defaults (`default_config()`):
 
--   `stoi : Char -> Int`
--   `itos : Int -> Char`
+- `n_embd = 16`
+- `n_head = 4`
+- `n_layer = 1`
+- `block_size = 16`
 
-### 4.3 Token Sequence Construction
+Parameters include:
 
-Each document is converted to:
+- token embeddings `wte`
+- positional embeddings `wpe`
+- per-layer attention matrices (`wq`, `wk`, `wv`, `wo`)
+- per-layer MLP matrices (`fc1`, `fc2`)
+- output projection `lm_head`
 
-    [BOS, c1, c2, ..., cn, BOS]
+All parameters are `Value` scalars initialized from Gaussian noise.
 
-------------------------------------------------------------------------
+## Forward Pass
 
-## 5. Model Architecture
+Per position:
 
-### 5.1 Hyperparameters
+1. Token + position embedding
+2. RMSNorm
+3. For each layer:
+   - RMSNorm
+   - multi-head causal self-attention via KV caches
+   - residual add
+   - RMSNorm
+   - MLP (`fc1 -> relu -> fc2`)
+   - residual add
+4. Output logits via `lm_head`
 
-Typical small configuration:
+Softmax and negative log-likelihood are built from `Value` operations.
 
-    n_embd     = 16
-    n_head     = 4
-    n_layer    = 1
-    block_size = 8
-    head_dim   = n_embd / n_head
+## Optimization
 
-### 5.2 Components
+Training uses Adam with:
 
-#### (1) Token Embedding
+- `beta1 = 0.85`
+- `beta2 = 0.99`
+- `eps = 1e-8`
+- linearly decayed LR over total training steps
 
-    wte : [vocab_size, n_embd]
+After each update, parameter grads are reset to `0.0`.
 
-#### (2) Positional Embedding
+## Sampling
 
-    wpe : [block_size, n_embd]
+Sampling is autoregressive and cached per layer.
 
-#### (3) Transformer Block (repeated n_layer times)
+1. Start at `token_id = BOS`
+2. Recompute logits at each position
+3. Apply temperature-scaled softmax on raw logits data
+4. Sample next token from probability mass
+5. Stop when BOS is sampled or `block_size` is reached
 
-Each block contains:
+## Determinism
 
--   RMSNorm
--   Multi-Head Self-Attention
--   Residual connection
--   RMSNorm
--   MLP (ReLU² activation)
--   Residual connection
+`Model::new` seeds RNG using a fixed byte pattern, so identical inputs and config yield deterministic train/sample behavior.
 
-#### (4) Language Modeling Head
+## Public API
 
-    lm_head : [vocab_size, n_embd]
+- `build_tokenizer(docs)`
+- `Model::new(docs, config)`
+- `Model::train(num_steps)`
+- `Model::sample(num_samples, temperature)`
+- `run_microgpt(docs, num_steps, num_samples, temperature, config)`
 
-------------------------------------------------------------------------
+## Limits
 
-## 6. Forward Pass
-
-For each token position:
-
-### 6.1 Embedding
-
-    x = wte[token_id] + wpe[position_id]
-
-### 6.2 RMSNorm
-
-    scale = (mean(x²) + eps)^(-1/2)
-    x = x * scale
-
-### 6.3 Multi-Head Attention
-
-For each head:
-
-1.  Compute projections:
-
-        q = Wq x
-        k = Wk x
-        v = Wv x
-
-2.  Store k and v in KV cache
-
-3.  Attention scores:
-
-        score_t = (q · k_t) / sqrt(head_dim)
-
-4.  Softmax over previous positions
-
-5.  Weighted sum of values
-
-Concatenate heads and project with:
-
-    Wo
-
-### 6.4 MLP
-
-    x -> fc1 -> ReLU -> square -> fc2
-
-### 6.5 Output
-
-    logits = lm_head(x)
-
-------------------------------------------------------------------------
-
-## 7. Loss Function
-
-For each position:
-
-    probs = softmax(logits)
-    loss_t = -log(probs[target_token])
-
-Final loss:
-
-    loss = mean(loss_t over positions)
-
-------------------------------------------------------------------------
-
-## 8. Manual Autograd
-
-### 8.1 Value Structure
-
-Each scalar value contains:
-
-    data
-    grad
-    prev (dependencies)
-    backward (function)
-
-### 8.2 Graph Construction
-
-Operations like:
-
-    +, -, *, /, exp, log, pow, relu
-
-create new Value nodes and record dependencies.
-
-### 8.3 Backward Pass
-
-1.  Topologically sort the graph\
-2.  Set `loss.grad = 1`\
-3.  Traverse in reverse order\
-4.  Accumulate gradients
-
-------------------------------------------------------------------------
-
-## 9. Optimization (Adam)
-
-For each parameter:
-
-    m = β1 m + (1-β1) g
-    v = β2 v + (1-β2) g²
-
-Bias-corrected:
-
-    m̂ = m / (1 - β1^t)
-    v̂ = v / (1 - β2^t)
-
-Update rule:
-
-    p -= lr * m̂ / (sqrt(v̂) + eps)
-
-------------------------------------------------------------------------
-
-## 10. Training Loop
-
-For each step:
-
-1.  Select document\
-2.  Construct token sequence\
-3.  Forward pass\
-4.  Compute mean loss\
-5.  Backward pass\
-6.  Adam update\
-7.  Print loss
-
-------------------------------------------------------------------------
-
-## 11. Inference (Sampling)
-
-### 11.1 Procedure
-
-1.  Start with:
-
-        token_id = BOS
-
-2.  For each position:
-
-    -   Forward pass\
-    -   Apply temperature scaling\
-    -   Compute softmax\
-    -   Sample from distribution\
-    -   Stop if BOS generated
-
-### 11.2 Temperature
-
--   \< 1.0 → more deterministic\
-
--   1.0 → more random
-
-------------------------------------------------------------------------
-
-## 12. Limitations
-
-Facts:
-
--   Scalar-based implementation\
--   No tensor acceleration\
--   High computational cost
-
-Interpretation:
-
--   Intended for education\
--   Suitable for studying gradient flow and Transformer internals
-
-------------------------------------------------------------------------
-
-## 13. Conclusion
-
-This document outlines a minimal GPT-style model implemented in MoonBit
-using manual autograd and a Transformer architecture.
-
-Pipeline summary:
-
-Embedding → Attention → MLP → Projection → Loss → Backward → Adam →
-Sampling
+- Scalar graph only (no tensor kernels)
+- Educational performance profile
+- Small model intended for learning and experimentation
